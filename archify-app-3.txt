@@ -1,0 +1,1603 @@
+          var candidates = [top, minTop, maxTop];
+          protectedRects.forEach(function (rect) {
+            candidates.push(
+              rect.top - containerRect.top - chip.offsetHeight - safeGap,
+              rect.bottom - containerRect.top + safeGap
+            );
+          });
+          var valid = candidates.map(function (candidate) {
+            return Math.max(minTop, Math.min(maxTop, candidate));
+          }).filter(function (candidate, index, all) {
+            if (all.indexOf(candidate) !== index) return false;
+            var candidateTop = containerRect.top + candidate;
+            var candidateBottom = candidateTop + chip.offsetHeight;
+            return protectedRects.every(function (rect) {
+              return candidateBottom <= rect.top - safeGap || candidateTop >= rect.bottom + safeGap;
+            });
+          });
+          valid.sort(function (first, second) {
+            return Math.abs(first - preferred) - Math.abs(second - preferred);
+          });
+          if (valid.length) top = valid[0];
+        }
+        chip.style.top = Math.round(top) + 'px';
+        if (Archify.radar && typeof Archify.radar.sync === 'function') Archify.radar.sync();
+      }
+      function requestLensPlacement() {
+        if (lensFrame) return;
+        lensFrame = requestAnimationFrame(placeRelationshipLens);
+      }
+      function clear(options) {
+        options = options || {};
+        var restoreNode = options.restoreFocus === true && activeIds.length === 1
+          ? svg.querySelector('[data-node-id="' + activeIds[0] + '"]')
+          : null;
+        clearReachability({ updateUrl: false });
+        if (Archify.intentTrace && typeof Archify.intentTrace.clear === 'function') {
+          Archify.intentTrace.clear({ announce: false });
+        }
+        hoveredRelationship = null;
+        focusedRelationship = null;
+        clearRelationshipPreview({ clearPin: true });
+        activeIds = [];
+        svg.removeAttribute('data-focus-active');
+        nodes().forEach(function (node) {
+          node.removeAttribute('data-focus-match');
+          node.removeAttribute('data-focus-selected');
+          node.setAttribute('aria-pressed', 'false');
+        });
+        edges().forEach(function (edge) { edge.removeAttribute('data-focus-match'); });
+        chip.hidden = true;
+        label.textContent = '';
+        detail.textContent = '';
+        detail.hidden = true;
+        kind.textContent = '';
+        kind.hidden = true;
+        context.textContent = '';
+        context.hidden = true;
+        tag.textContent = '';
+        tag.hidden = true;
+        semanticId.textContent = '';
+        semanticId.hidden = true;
+        evidence.hidden = true;
+        evidenceLinks.textContent = '';
+        repositoryLink.removeAttribute('href');
+        repositoryLink.textContent = '';
+        summary.textContent = '';
+        reachSection.hidden = true;
+        upstreamCount.textContent = '0';
+        downstreamCount.textContent = '0';
+        upstreamBtn.disabled = true;
+        downstreamBtn.disabled = true;
+        relationshipList.textContent = '';
+        copyBtn.textContent = viewerText('viewer.passport.copy');
+        copyBtn.setAttribute('aria-label', viewerText('viewer.passport.copy.focus'));
+        relationsBtn.textContent = viewerText('viewer.passport.relations');
+        relationsBtn.setAttribute('aria-label', viewerText('viewer.passport.relations.show'));
+        relationsBtn.setAttribute('aria-expanded', 'false');
+        chip.removeAttribute('data-relations-expanded');
+        chip.style.removeProperty('top');
+        if (options.preserveView !== true && Archify.view && typeof Archify.view.reset === 'function') {
+          Archify.view.reset({ automatic: true });
+        }
+        if (options.updateUrl !== false) {
+          try { history.replaceState(null, '', location.pathname + location.search); } catch (_) {}
+        }
+        if (restoreNode) {
+          try { restoreNode.focus({ preventScroll: true }); }
+          catch (_) { try { restoreNode.focus(); } catch (_) {} }
+        }
+      }
+
+      function setMany(ids, options) {
+        options = options || {};
+        if (Archify.semanticLens && typeof Archify.semanticLens.clearPreview === 'function') Archify.semanticLens.clearPreview();
+        if (Archify.semanticLens && Archify.semanticLens.active()) {
+          Archify.semanticLens.clear({ updateUrl: false, preserveView: true, closePanel: true });
+        }
+        if (options.preserveRoute !== true && Archify.routeProbe && typeof Archify.routeProbe.clear === 'function') {
+          Archify.routeProbe.clear({ updateUrl: false, restoreFocus: false });
+        }
+        var nodeList = nodes();
+        var byId = Object.create(null);
+        nodeList.forEach(function (node) { byId[node.getAttribute('data-node-id')] = node; });
+        var normalized = [];
+        (ids || []).forEach(function (id) {
+          if (byId[id] && normalized.indexOf(id) === -1) normalized.push(id);
+        });
+        if (!normalized.length) return false;
+        if (normalized.length === activeIds.length && normalized.every(function (id, index) { return activeIds[index] === id; }) && options.toggle !== false) {
+          clear();
+          return true;
+        }
+
+        clear({ updateUrl: false, preserveView: true });
+        activeIds = normalized;
+        var selected = Object.create(null);
+        var related = Object.create(null);
+        var seenEdges = {};
+        var matchedEdges = 0;
+        normalized.forEach(function (id) { selected[id] = true; related[id] = true; });
+        var selectionMode = options.mode === 'selection' || normalized.length > 1;
+
+        edges().forEach(function (edge) {
+          var from = edge.getAttribute('data-edge-from');
+          var to = edge.getAttribute('data-edge-to');
+          var match = selectionMode ? selected[from] && selected[to] : selected[from] || selected[to];
+          if (!match) return;
+          edge.setAttribute('data-focus-match', '');
+          if (!selectionMode) { related[from] = true; related[to] = true; }
+          var edgeKey = edge.getAttribute('data-edge-key') || (from + '\u0000' + to + '\u0000' + (edge.getAttribute('data-edge-label') || ''));
+          if (!seenEdges[edgeKey]) { seenEdges[edgeKey] = true; matchedEdges += 1; }
+        });
+        nodeList.forEach(function (node) {
+          var nodeId = node.getAttribute('data-node-id');
+          if (related[nodeId]) node.setAttribute('data-focus-match', '');
+          if (selected[nodeId]) {
+            node.setAttribute('data-focus-selected', '');
+            node.setAttribute('aria-pressed', 'true');
+          }
+        });
+        svg.setAttribute('data-focus-active', normalized.join(' '));
+        var defaultLabel = normalized.length === 1
+          ? nodeLabel(byId[normalized[0]], normalized[0])
+          : viewerText('viewer.guided.chapter.selectedNodes', { count: normalized.length });
+        label.textContent = options.label || defaultLabel;
+        chip.hidden = options.hideChip === true || normalized.length !== 1 || selectionMode;
+        if (!chip.hidden) {
+          renderRelationshipLens(normalized[0], byId);
+          requestLensPlacement();
+        }
+        if (options.updateUrl !== false) {
+          var key = options.urlKey || 'focus';
+          var value = options.urlValue || normalized[0];
+          try { history.replaceState(null, '', location.pathname + location.search + '#' + key + '=' + encodeURIComponent(value)); } catch (_) {}
+        }
+        return true;
+      }
+
+      function set(id, options) {
+        options = options || {};
+        options.mode = 'neighborhood';
+        return setMany([id], options);
+      }
+
+      function fallbackCopy(value) {
+        var field = document.createElement('textarea');
+        field.value = value;
+        field.setAttribute('readonly', '');
+        field.style.position = 'fixed';
+        field.style.opacity = '0';
+        document.body.appendChild(field);
+        field.select();
+        var copied = false;
+        try { copied = document.execCommand('copy'); } catch (_) {}
+        field.remove();
+        return copied;
+      }
+
+      function copyFocusLink() {
+        if (activeIds.length !== 1) return Promise.resolve(false);
+        var record = pinnedRelationshipRecord();
+        var relationId = record && record.id;
+        var value = location.href.replace(/#.*$/, '') + (relationId
+          ? '#relation=' + encodeURIComponent(relationId)
+          : '#focus=' + encodeURIComponent(activeIds[0]) + (reachabilityMode ? '&reach=' + reachabilityMode : ''));
+        var copy = navigator.clipboard && typeof navigator.clipboard.writeText === 'function'
+          ? navigator.clipboard.writeText(value).then(function () { return true; }).catch(function () { return fallbackCopy(value); })
+          : Promise.resolve(fallbackCopy(value));
+        return copy.then(function (copied) {
+          copyBtn.textContent = viewerText(copied ? 'viewer.common.copied' : 'viewer.common.copyFailed');
+          copyBtn.setAttribute('aria-label', copied
+            ? viewerText(relationId ? 'viewer.passport.copy.pinned.success' : 'viewer.passport.copy.focused.success')
+            : viewerText(relationId ? 'viewer.passport.copy.pinned.failed' : 'viewer.passport.copy.focused.failed'));
+          window.setTimeout(function () {
+            renderRelationshipCopyAction();
+          }, 1600);
+          return copied;
+        });
+      }
+
+      svg.addEventListener('click', function (event) {
+        if (container.getAttribute('data-just-panned') === 'true') return;
+        var node = event.target.closest('[data-node-id]');
+        if (node) {
+          var id = node.getAttribute('data-node-id');
+          set(id);
+          if (activeIds.indexOf(id) !== -1 && Archify.view && typeof Archify.view.reveal === 'function') {
+            Archify.view.reveal([id], { includeNeighbors: true, reason: 'focus' });
+          }
+        }
+        else if (activeIds.length) clear();
+      });
+      svg.addEventListener('keydown', function (event) {
+        var node = event.target.closest('[data-node-id]');
+        if (!node || (event.key !== 'Enter' && event.key !== ' ')) return;
+        event.preventDefault();
+        var id = node.getAttribute('data-node-id');
+        set(id);
+        if (activeIds.indexOf(id) !== -1 && Archify.view && typeof Archify.view.reveal === 'function') {
+          Archify.view.reveal([id], { includeNeighbors: true, reason: 'focus' });
+        }
+      });
+      clearBtn.addEventListener('click', function () { clear({ restoreFocus: true }); });
+      copyBtn.addEventListener('click', copyFocusLink);
+      upstreamBtn.addEventListener('click', function () { applyReachability('upstream'); });
+      downstreamBtn.addEventListener('click', function () { applyReachability('downstream'); });
+      relationsBtn.addEventListener('click', function () {
+        var expanded = chip.getAttribute('data-relations-expanded') === 'true';
+        if (expanded) chip.removeAttribute('data-relations-expanded');
+        else chip.setAttribute('data-relations-expanded', 'true');
+        relationsBtn.setAttribute('aria-expanded', expanded ? 'false' : 'true');
+        relationsBtn.setAttribute('aria-label', viewerText(expanded
+          ? 'viewer.passport.relations.show'
+          : 'viewer.passport.relations.hide'));
+        requestLensPlacement();
+      });
+      relationshipList.addEventListener('click', function (event) {
+        var button = event.target.closest('[data-relationship-target]');
+        if (!button) return;
+        var id = button.getAttribute('data-relationship-target');
+        if (Archify.guidedViews && typeof Archify.guidedViews.showAll === 'function') {
+          Archify.guidedViews.showAll({ clearFocus: false, updateUrl: false });
+        }
+        set(id, { toggle: false });
+        if (Archify.view && typeof Archify.view.reveal === 'function') {
+          Archify.view.reveal([id], { includeNeighbors: true, reason: 'relationship' });
+        }
+        var node = svg.querySelector('[data-node-id="' + id + '"]');
+        if (node) {
+          try { node.focus({ preventScroll: true }); } catch (_) { try { node.focus(); } catch (_) {} }
+        }
+      });
+      relationshipList.addEventListener('pointerover', function (event) {
+        if (event.pointerType === 'touch') return;
+        if (finePointerQuery && !finePointerQuery.matches) return;
+        var button = event.target.closest('[data-relationship-key]');
+        if (!button || !relationshipList.contains(button)) return;
+        if (event.relatedTarget && button.contains(event.relatedTarget)) return;
+        hoveredRelationship = button;
+        syncRelationshipPreview();
+      });
+      relationshipList.addEventListener('pointerout', function (event) {
+        var button = event.target.closest('[data-relationship-key]');
+        if (!button || (event.relatedTarget && button.contains(event.relatedTarget))) return;
+        if (hoveredRelationship === button) hoveredRelationship = null;
+        syncRelationshipPreview();
+      });
+      relationshipList.addEventListener('focusin', function (event) {
+        var button = event.target.closest('[data-relationship-key]');
+        if (!button) return;
+        focusedRelationship = button;
+        syncRelationshipPreview();
+      });
+      relationshipList.addEventListener('focusout', function (event) {
+        var button = event.target.closest('[data-relationship-key]');
+        if (!button || (event.relatedTarget && button.contains(event.relatedTarget))) return;
+        if (focusedRelationship === button) focusedRelationship = null;
+        syncRelationshipPreview();
+      });
+      relationshipList.addEventListener('keydown', function (event) {
+        if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp' && event.key !== 'Home' && event.key !== 'End') return;
+        var buttons = Array.prototype.slice.call(relationshipList.querySelectorAll('[data-relationship-target]'));
+        if (!buttons.length) return;
+        var index = buttons.indexOf(document.activeElement);
+        if (event.key === 'Home') index = 0;
+        else if (event.key === 'End') index = buttons.length - 1;
+        else if (event.key === 'ArrowDown') index = Math.min(buttons.length - 1, Math.max(0, index + 1));
+        else index = Math.max(0, index < 0 ? 0 : index - 1);
+        event.preventDefault();
+        buttons[index].focus();
+      });
+      document.addEventListener('click', function (event) {
+        var target = event.target;
+        if (chip.hidden || !target || typeof target.closest !== 'function' || chip.contains(target)) return;
+        if (container.getAttribute('data-just-panned') === 'true') return;
+        if (target.closest('[data-node-id], [data-relationship-hit-key], .overview-map')) return;
+        clear();
+      }, true);
+      window.addEventListener('scroll', requestLensPlacement, { passive: true });
+      window.addEventListener('resize', requestLensPlacement);
+      container.addEventListener('scroll', requestLensPlacement, { passive: true });
+      document.addEventListener('visibilitychange', function () {
+        if (document.hidden) removeRelationshipPulse();
+      });
+      function syncRelationshipMotionPreference(event) {
+        if (event.matches) removeRelationshipPulse();
+      }
+      if (reducedMotionQuery) {
+        if (typeof reducedMotionQuery.addEventListener === 'function') {
+          reducedMotionQuery.addEventListener('change', syncRelationshipMotionPreference);
+        } else if (typeof reducedMotionQuery.addListener === 'function') {
+          reducedMotionQuery.addListener(syncRelationshipMotionPreference);
+        }
+      }
+
+      installRelationshipHitTargets();
+
+      function syncFocusFromHash() {
+        try {
+          var params = new URLSearchParams(location.hash.replace(/^#/, ''));
+          var relation = params.get('relation');
+          var initial = params.get('focus');
+          var reach = params.get('reach');
+          if (relation) {
+            if (html.getAttribute('data-embed') === 'true' ||
+                !inspectRelationshipById(relation, { updateUrl: false, toggle: false })) clear({ updateUrl: false });
+          }
+          else if (initial) {
+            if (set(initial, { updateUrl: false, toggle: false }) &&
+                (reach === 'upstream' || reach === 'downstream')) {
+              applyReachability(reach, { updateUrl: false, toggle: false, reveal: false });
+            }
+          }
+          else if (!params.get('view')) clear({ updateUrl: false });
+        } catch (_) {}
+      }
+
+      window.addEventListener('hashchange', syncFocusFromHash);
+      syncFocusFromHash();
+
+      return {
+        set: set,
+        setMany: setMany,
+        clear: clear,
+        copyLink: copyFocusLink,
+        reach: applyReachability,
+        clearReach: clearReachability,
+        reachabilitySnapshot: reachabilitySnapshot,
+        inspectRelationship: inspectRelationship,
+        inspectRelationshipById: inspectRelationshipById,
+        reposition: requestLensPlacement,
+        relationship: function () {
+          var record = pinnedRelationshipRecord();
+          return record ? { id: record.id || null, key: record.key, from: record.from, to: record.to, label: record.label } : null;
+        },
+        reachability: function () {
+          return activeReachability ? {
+            direction: activeReachability.direction,
+            originId: activeReachability.originId,
+            nodeIds: activeReachability.nodeIds.slice(),
+            edgeKeys: activeReachability.edgeKeys.slice(),
+            maxDepth: activeReachability.maxDepth
+          } : null;
+        },
+        active: function () { return activeIds.length === 0 ? null : (activeIds.length === 1 ? activeIds[0] : activeIds.slice()); }
+      };
+    })();
+
+    /* ============================================================
+       Intent Trace — temporary one-hop topology before durable focus.
+       Fine-pointer hover and keyboard focus share the same stable-ID preview;
+       touch continues directly to the existing click-to-focus contract.
+       ============================================================ */
+    Archify.intentTrace = (function () {
+      var html = document.documentElement;
+      var container = document.querySelector('.diagram-container');
+      var svg = container.querySelector(':scope > svg');
+      var status = document.getElementById('intent-trace-status');
+      var namespace = 'http://www.w3.org/2000/svg';
+      var activeId = null;
+      var hoveredNode = null;
+      var focusedNode = null;
+      var enterTimer = null;
+
+      function nodes() {
+        return Array.prototype.slice.call(svg.querySelectorAll('[data-node-id]'));
+      }
+      function edges() {
+        return Array.prototype.slice.call(svg.querySelectorAll('[data-edge-from][data-edge-to]'));
+      }
+      function nodeLabel(node, fallback) {
+        return node.getAttribute('data-node-label') ||
+          (node.getAttribute('aria-label') || fallback).replace(/^Focus\s+/, '').split(',')[0];
+      }
+      function finePointer() {
+        return !window.matchMedia || window.matchMedia('(hover: hover) and (pointer: fine)').matches;
+      }
+      function reducedMotion() {
+        return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+      }
+      function blocked() {
+        return html.getAttribute('data-embed') === 'true' ||
+          html.getAttribute('data-guide-open') === 'true' ||
+          container.classList.contains('is-panning') ||
+          svg.hasAttribute('data-lens-active') ||
+          svg.hasAttribute('data-story-active') ||
+          svg.hasAttribute('data-relationship-preview-active') ||
+          !!(Archify.routeProbe && typeof Archify.routeProbe.active === 'function' && Archify.routeProbe.active()) ||
+          !!(Archify.focus && typeof Archify.focus.active === 'function' && Archify.focus.active());
+      }
+      function edgeShapes(edge) {
+        if (/^(path|line|polyline)$/i.test(edge.tagName)) return [edge];
+        return Array.prototype.slice.call(edge.querySelectorAll('path, line, polyline'));
+      }
+      function removeOverlay() {
+        Array.prototype.forEach.call(svg.querySelectorAll('[data-intent-trace-overlay]'), function (overlay) {
+          overlay.remove();
+        });
+      }
+      function clear(options) {
+        options = options || {};
+        if (enterTimer) window.clearTimeout(enterTimer);
+        enterTimer = null;
+        activeId = null;
+        svg.removeAttribute('data-intent-trace-active');
+        removeOverlay();
+        nodes().forEach(function (node) {
+          node.removeAttribute('data-intent-trace-match');
+          node.removeAttribute('data-intent-trace-selected');
+        });
+        edges().forEach(function (edge) { edge.removeAttribute('data-intent-trace-match'); });
+        if (options.announce !== false) status.textContent = '';
+      }
+      function traceGeometry(shape, direction) {
+        var clone = shape.cloneNode(false);
+        clone.removeAttribute('id');
+        clone.removeAttribute('class');
+        clone.removeAttribute('style');
+        clone.removeAttribute('marker-start');
+        clone.removeAttribute('marker-mid');
+        clone.removeAttribute('marker-end');
+        clone.removeAttribute('role');
+        clone.removeAttribute('aria-label');
+        clone.removeAttribute('aria-labelledby');
+        clone.removeAttribute('data-animate');
+        clone.removeAttribute('data-edge-from');
+        clone.removeAttribute('data-edge-to');
+        clone.removeAttribute('data-edge-key');
+        clone.removeAttribute('data-edge-id');
+        clone.removeAttribute('data-edge-label');
+        clone.removeAttribute('data-intent-trace-match');
+        clone.removeAttribute('data-intent-trace-selected');
+        clone.setAttribute('class', 'intent-trace-flow');
+        clone.setAttribute('data-direction', direction);
+        clone.setAttribute('pathLength', '1');
+        return clone;
+      }
+      function show(id, options) {
+        options = options || {};
+        if (!id || blocked()) {
+          clear({ announce: false });
+          return false;
+        }
+        if (activeId === id) return true;
+        clear({ announce: false });
+        var nodeList = nodes();
+        var edgeList = edges();
+        var byId = Object.create(null);
+        nodeList.forEach(function (node) { byId[node.getAttribute('data-node-id')] = node; });
+        var selected = byId[id];
+        if (!selected) return false;
+
+        var overlay = document.createElementNS(namespace, 'g');
+        overlay.setAttribute('class', 'intent-trace-overlay');
+        overlay.setAttribute('data-intent-trace-overlay', '');
+        overlay.setAttribute('aria-hidden', 'true');
+        var related = Object.create(null);
+        var seen = {};
+        var counts = { out: 0, in: 0, loop: 0 };
+        related[id] = true;
+
+        edgeList.forEach(function (edge) {
+          var from = edge.getAttribute('data-edge-from');
+          var to = edge.getAttribute('data-edge-to');
+          if (from !== id && to !== id) return;
+          var direction = from === id && to === id ? 'loop' : (from === id ? 'out' : 'in');
+          var key = edge.getAttribute('data-edge-key') ||
+            (from + '\u0000' + to + '\u0000' + (edge.getAttribute('data-edge-label') || ''));
+          if (!seen[key]) {
+            seen[key] = true;
+            counts[direction] += 1;
+          }
+          related[from] = true;
+          related[to] = true;
+          edge.setAttribute('data-intent-trace-match', '');
+          var wrapper = document.createElementNS(namespace, 'g');
+          if (edge.hasAttribute('transform')) wrapper.setAttribute('transform', edge.getAttribute('transform'));
+          edgeShapes(edge).forEach(function (shape) {
+            wrapper.appendChild(traceGeometry(shape, direction));
+          });
+          if (wrapper.childNodes.length) overlay.appendChild(wrapper);
+        });
+
+        nodeList.forEach(function (node) {
+          var nodeId = node.getAttribute('data-node-id');
+          if (related[nodeId]) node.setAttribute('data-intent-trace-match', '');
+          if (nodeId === id) node.setAttribute('data-intent-trace-selected', '');
+        });
+        if (overlay.childNodes.length) {
+          var firstEdge = edgeList[0];
+          var firstNode = svg.querySelector('[data-node-id]');
+          if (firstEdge && firstEdge.parentNode) firstEdge.parentNode.insertBefore(overlay, firstEdge);
+          else if (firstNode) svg.insertBefore(overlay, firstNode);
+          else svg.appendChild(overlay);
+        }
+        activeId = id;
+        svg.setAttribute('data-intent-trace-active', id);
+        if (options.announce === true) {
+          var total = counts.out + counts.in + counts.loop;
+          status.textContent = viewerText('viewer.intent.summary', {
+            label: nodeLabel(selected, id),
+            out: counts.out,
+            in: counts.in,
+            loops: counts.loop ? viewerText('viewer.intent.loops', { count: counts.loop }) : '',
+            total: total
+          });
+        }
+        return true;
+      }
+      function schedule(node) {
+        if (enterTimer) window.clearTimeout(enterTimer);
+        enterTimer = window.setTimeout(function () {
+          enterTimer = null;
+          if (hoveredNode === node) show(node.getAttribute('data-node-id'), { announce: false });
+        }, reducedMotion() ? 0 : 90);
+      }
+      function sync() {
+        var candidate = focusedNode || hoveredNode;
+        if (!candidate) {
+          clear();
+          return;
+        }
+        show(candidate.getAttribute('data-node-id'), { announce: candidate === focusedNode });
+      }
+
+      svg.addEventListener('pointerover', function (event) {
+        var node = event.target.closest('[data-node-id]');
+        if (!node || !finePointer() || event.pointerType === 'touch') return;
+        if (event.relatedTarget && node.contains(event.relatedTarget)) return;
+        hoveredNode = node;
+        schedule(node);
+      });
+      svg.addEventListener('pointerout', function (event) {
+        var node = event.target.closest('[data-node-id]');
+        if (!node || (event.relatedTarget && node.contains(event.relatedTarget))) return;
+        if (hoveredNode === node) hoveredNode = null;
+        sync();
+      });
+      svg.addEventListener('focusin', function (event) {
+        var node = event.target.closest('[data-node-id]');
+        if (!node) return;
+        focusedNode = node;
+        show(node.getAttribute('data-node-id'), { announce: true });
+      });
+      svg.addEventListener('focusout', function (event) {
+        var node = event.target.closest('[data-node-id]');
+        if (!node || (event.relatedTarget && node.contains(event.relatedTarget))) return;
+        if (focusedNode === node) focusedNode = null;
+        sync();
+      });
+      container.addEventListener('pointerdown', function (event) {
+        if (!event.target.closest('[data-node-id]')) clear({ announce: false });
+      });
+      window.addEventListener('blur', function () { clear({ announce: false }); });
+
+      return {
+        show: show,
+        clear: clear,
+        active: function () { return activeId; }
+      };
+    })();
+
+    Archify.guidedViews = (function () {
+      var data = document.getElementById('archify-guided-views-data');
+      var panel = document.getElementById('guided-views');
+      var prev = document.getElementById('guided-view-prev');
+      var next = document.getElementById('guided-view-next');
+      var all = document.getElementById('guided-view-all');
+      var play = document.getElementById('guided-view-play');
+      var playIcon = document.getElementById('guided-view-play-icon');
+      var playLabel = document.getElementById('guided-view-play-label');
+      var beatLink = document.getElementById('guided-view-beat-link');
+      var beatLinkLabel = document.getElementById('guided-view-beat-link-label');
+      var progressBar = document.getElementById('guided-view-progress-bar');
+      var count = document.getElementById('guided-view-count');
+      var handoffReceipt = document.getElementById('guided-view-handoff');
+      var label = document.getElementById('guided-view-label');
+      var note = document.getElementById('guided-view-note');
+      var trail = document.getElementById('guided-view-trail');
+      var storyCaption = document.getElementById('guided-story-caption');
+      var storyCaptionIndex = document.getElementById('guided-story-caption-index');
+      var storyCaptionRoute = document.getElementById('guided-story-caption-route');
+      var storyCaptionDetail = document.getElementById('guided-story-caption-detail');
+      var storyCaptionNext = document.getElementById('guided-story-caption-next');
+      var storyCaptionNextLabel = document.getElementById('guided-story-caption-next-label');
+      var chapterIndex = document.getElementById('guided-view-index');
+      var chapterList = document.getElementById('guided-view-chapters');
+      var shareCue = document.getElementById('share-chapter-cue');
+      var shareCueState = document.getElementById('share-chapter-state');
+      var shareCueCount = document.getElementById('share-chapter-count');
+      var shareCueLabel = document.getElementById('share-chapter-label');
+      var shareCueNote = document.getElementById('share-chapter-note');
+      var shareCueRoute = document.getElementById('share-chapter-route');
+      var shareCueProgress = document.getElementById('share-chapter-progress-bar');
+      var svg = document.querySelector('.diagram-container svg');
+      var views = [];
+      var activeIndex = -1;
+      var playing = false;
+      var storyBeatTimer = null;
+      var storyBeatIndex = -1;
+      var storyBeatStartedAt = 0;
+      var storyBeatElapsedMs = 0;
+      var storyBeatDwellMs = 0;
+      var storyPlaybackGeneration = 0;
+      var storyFollowGeneration = 0;
+      var storyPlaybackScope = 'story';
+      var storyPlaybackComplete = false;
+      var beatLinkFeedbackTimer = null;
+      var momentRestoreGeneration = 0;
+      var storySteps = [];
+      var storyPulseOwnerToken = 0;
+      var storyPulseGeneration = 0;
+      var autoplayPending = false;
+      var VIEW_INTERVAL_MS = 3200;
+      var STORY_FOLLOW_MIN_DWELL_MS = 1100;
+      var STORY_FOLLOW_DURATION_MS = 320;
+      var chapterButtons = [];
+      var handoffGeneration = 0;
+      var currentHandoff = null;
+      var previewGeneration = 0;
+      var pointerPreviewIntent = null;
+      var focusPreviewIntent = null;
+      var activePreviewIndex = -1;
+      var previewOwnerToken = 0;
+
+      try { views = JSON.parse(data.textContent || '[]'); } catch (_) { views = []; }
+      if (!views.length) return { count: 0, active: function () { return null; } };
+      var canonicalNodeIds = Object.create(null);
+      Array.prototype.forEach.call(svg.querySelectorAll('[data-node-id]'), function (node) {
+        canonicalNodeIds[node.getAttribute('data-node-id')] = true;
+      });
+      views.forEach(function (view) {
+        var seen = Object.create(null);
+        view.focus = (view.focus || []).filter(function (id) {
+          if (!canonicalNodeIds[id] || seen[id]) return false;
+          seen[id] = true;
+          return true;
+        });
+      });
+      // Establish the compact cold state before exposing the panel so the
+      // full Director cannot flash during first paint. Hash restoration runs
+      // in the same task and replaces this state before paint when valid.
+      panel.setAttribute('data-active-view', 'all');
+      panel.hidden = false;
+      panel.setAttribute('data-view-interval-ms', String(VIEW_INTERVAL_MS));
+      panel.setAttribute('data-story-follow-min-dwell-ms', String(STORY_FOLLOW_MIN_DWELL_MS));
+      buildChapterIndex();
+
+      function reducedMotion() {
+        return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+      }
+
+      function findNode(id) {
+        return Array.prototype.find.call(svg.querySelectorAll('[data-node-id]'), function (node) {
+          return node.getAttribute('data-node-id') === id;
+        }) || null;
+      }
+
+      function chapterDelta(previous, destination) {
+        var previousFocus = previous ? previous.focus : [];
+        var destinationFocus = destination ? destination.focus : [];
+        var previousIds = Object.create(null);
+        var destinationIds = Object.create(null);
+        previousFocus.forEach(function (id) { previousIds[id] = true; });
+        destinationFocus.forEach(function (id) { destinationIds[id] = true; });
+        return {
+          stay: previousFocus.filter(function (id) { return destinationIds[id]; }),
+          enter: destinationFocus.filter(function (id) { return !previousIds[id]; }),
+          leave: previousFocus.filter(function (id) { return !destinationIds[id]; })
+        };
+      }
+
+      function chapterAnchor(previous, destination, outgoingBeatIndex, delta) {
+        if (!previous || !destination) return '';
+        var stayIds = Object.create(null);
+        delta.stay.forEach(function (id) { stayIds[id] = true; });
+        var activeBeat = outgoingBeatIndex >= 0 ? previous.focus[outgoingBeatIndex] : '';
+        if (activeBeat && stayIds[activeBeat]) return activeBeat;
+        for (var index = previous.focus.length - 1; index >= 0; index -= 1) {
+          if (stayIds[previous.focus[index]]) return previous.focus[index];
+        }
+        return '';
+      }
+
+      function handoffMotionAllowed() {
+        if (document.hidden || reducedMotion()) return false;
+        if (document.documentElement.getAttribute('data-embed') === 'true') return false;
+        if (window.matchMedia && window.matchMedia('print').matches) return false;
+        return !(Archify.motionGovernor && Archify.motionGovernor.capable && Archify.motionGovernor.isPaused());
+      }
+
+      function classifyHandoff(delta, anchor) {
+        var roles = Object.create(null);
+        delta.stay.forEach(function (id) { roles[id] = 'stay'; });
+        delta.enter.forEach(function (id) { roles[id] = 'enter'; });
+        delta.leave.forEach(function (id) { roles[id] = 'leave'; });
+        Array.prototype.forEach.call(svg.querySelectorAll('[data-node-id]'), function (node) {
+          var id = node.getAttribute('data-node-id');
+          var role = roles[id] || '';
+          if (role) node.setAttribute('data-chapter-role', role);
+          else node.removeAttribute('data-chapter-role');
+        });
+        svg.setAttribute('data-chapter-handoff', anchor ? 'anchor' : 'no-anchor');
+        if (anchor) svg.setAttribute('data-chapter-anchor', anchor);
+        else svg.removeAttribute('data-chapter-anchor');
+      }
+
+      function drawHandoffAnchor(id) {
+        var node = findNode(id);
+        if (!node) return null;
+        var box;
+        try { box = node.getBBox(); } catch (_) { return null; }
+        var overlay = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+        var ring = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        overlay.setAttribute('class', 'chapter-handoff-overlay');
+        overlay.setAttribute('data-chapter-handoff-overlay', '');
+        overlay.setAttribute('aria-hidden', 'true');
+        ring.setAttribute('class', 'chapter-handoff-anchor');
+        ring.setAttribute('x', String(box.x - 8));
+        ring.setAttribute('y', String(box.y - 8));
+        ring.setAttribute('width', String(box.width + 16));
+        ring.setAttribute('height', String(box.height + 16));
+        ring.setAttribute('rx', '10');
+        overlay.appendChild(ring);
+        svg.appendChild(overlay);
+        return overlay;
+      }
+
+      function clearHandoffPresentation() {
+        svg.removeAttribute('data-chapter-handoff');
+        svg.removeAttribute('data-chapter-anchor');
+        Array.prototype.forEach.call(svg.querySelectorAll('[data-chapter-handoff-overlay]'), function (overlay) { overlay.remove(); });
+        Array.prototype.forEach.call(svg.querySelectorAll('[data-chapter-role]'), function (node) { node.removeAttribute('data-chapter-role'); });
+        if (handoffReceipt) {
+          handoffReceipt.hidden = true;
+          handoffReceipt.textContent = '';
+        }
+      }
+
+      function completeHandoff(handoff, outcome) {
+        if (!handoff || currentHandoff !== handoff) return false;
+        if (handoff.holdTimer) clearTimeout(handoff.holdTimer);
+        handoff.holdTimer = null;
+        currentHandoff = null;
+        clearHandoffPresentation();
+        if (handoff.ownerToken && Archify.motionGovernor) Archify.motionGovernor.release(handoff.ownerToken);
+        handoff.resolve({ id: handoff.id, state: outcome || 'complete', anchor: handoff.anchor || null });
+        syncStoryControlsDisabled();
+        syncChapterPreview();
+        return true;
+      }
+
+      function settleHandoff(reason) {
+        var handoff = currentHandoff;
+        if (!handoff) return false;
+        if (handoff.holdTimer) clearTimeout(handoff.holdTimer);
+        handoff.holdTimer = null;
+        if (handoff.camera && handoff.camera.cancel) handoff.camera.cancel(reason || 'settled', true);
+        else if (Archify.view && Archify.view.reveal) Archify.view.reveal(handoff.focus, { instant: true, reason: reason || 'settled' });
+        completeHandoff(handoff, reason || 'settled');
+        return true;
+      }
+
+      function cancelHandoff(reason) {
+        var handoff = currentHandoff;
+        if (!handoff) return false;
+        if (handoff.holdTimer) clearTimeout(handoff.holdTimer);
+        handoff.holdTimer = null;
+        if (handoff.camera && handoff.camera.cancel) handoff.camera.cancel(reason || 'manual', false);
+        completeHandoff(handoff, reason || 'manual');
+        return true;
+      }
+
+      function afterHandoff(callback) {
+        if (!currentHandoff) { callback(); return; }
+        currentHandoff.finished.then(callback);
+      }
+
+      function beginHandoff(previousIndex, nextIndex, previous, destination, outgoingBeatIndex, reason) {
+        if (!Archify.view || !Archify.view.reveal) return null;
+        if (!previous || previousIndex === nextIndex) {
+          Archify.view.reveal(destination.focus, { reason: reason });
+          return null;
+        }
+        var delta = chapterDelta(previous, destination);
+        var anchor = chapterAnchor(previous, destination, outgoingBeatIndex, delta);
+        if (!handoffMotionAllowed()) {
+          Archify.view.reveal(destination.focus, { instant: true, reason: reason });
+          return null;
+        }
+        var resolver;
+        var handoff = {
+          id: ++handoffGeneration,
+          mode: anchor ? 'holding' : 'no-anchor',
+          anchor: anchor,
+          focus: destination.focus.slice(),
+          holdTimer: null,
+          camera: null,
+          ownerToken: 0,
+          finished: new Promise(function (resolve) { resolver = resolve; }),
+          resolve: resolver
+        };
+        currentHandoff = handoff;
+        classifyHandoff(delta, anchor);
+        if (anchor) {
+          drawHandoffAnchor(anchor);
+          var node = findNode(anchor);
+          var nodeLabel = node ? (node.getAttribute('data-node-label') || anchor) : anchor;
+          handoffReceipt.textContent = viewerText('viewer.guided.handoff', {
+            from: (previousIndex + 1 < 10 ? '0' : '') + (previousIndex + 1),
+            to: (nextIndex + 1 < 10 ? '0' : '') + (nextIndex + 1),
+            label: nodeLabel
+          });
+          handoffReceipt.hidden = false;
+        }
+        if (Archify.motionGovernor) {
+          handoff.ownerToken = Archify.motionGovernor.claim('handoff', function () {
+            if (currentHandoff === handoff) settleHandoff('preempted');
+          });
+        }
+        var startCamera = function () {
+          if (currentHandoff !== handoff) return;
+          handoff.holdTimer = null;
+          handoff.mode = 'settling';
+          svg.setAttribute('data-chapter-handoff', anchor ? 'settling' : 'no-anchor');
+          handoff.camera = Archify.view.reveal(destination.focus, { reason: reason, duration: 420 });
+          if (handoff.camera && handoff.camera.finished) {
+            handoff.camera.finished.then(function (outcome) {
+              if (currentHandoff === handoff) completeHandoff(handoff, outcome && outcome.state || 'complete');
+            });
+          } else {
+            completeHandoff(handoff, 'complete');
+          }
+        };
+        if (anchor) handoff.holdTimer = setTimeout(startCamera, 110);
+        else startCamera();
+        return handoff;
+      }
+
+      function centerChapterButton(button) {
+        if (!button || !chapterList) return false;
+        var target = Math.max(0, button.offsetLeft - (chapterList.clientWidth - button.offsetWidth) / 2);
+        if (typeof chapterList.scrollTo === 'function') chapterList.scrollTo({ left: target, behavior: 'auto' });
+        else chapterList.scrollLeft = target;
+        return true;
+      }
+
+      function focusChapterButton(index) {
+        if (!chapterButtons.length) return false;
+        index = Math.max(0, Math.min(chapterButtons.length - 1, index));
+        chapterButtons.forEach(function (button, buttonIndex) {
+          button.setAttribute('tabindex', buttonIndex === index ? '0' : '-1');
+        });
+        chapterButtons[index].focus();
+        centerChapterButton(chapterButtons[index]);
+        return true;
+      }
+
+      function buildChapterIndex() {
+        chapterButtons = [];
+        chapterList.textContent = '';
+        views.forEach(function (view, index) {
+          var item = document.createElement('li');
+          var button = document.createElement('button');
+          button.type = 'button';
+          button.className = 'guided-view-chapter';
+          button.setAttribute('data-guided-view-id', view.id);
+          button.setAttribute('aria-pressed', 'false');
+          button.setAttribute('tabindex', index === 0 ? '0' : '-1');
+          button.setAttribute('aria-label', viewerText('viewer.guided.chapter.open', {
+            index: index + 1,
+            total: views.length,
+            label: view.label,
+            count: view.focus.length
+          }));
+          button.title = view.label + ' — ' + (view.note || viewerText('viewer.guided.chapter.selectedNodes', { count: view.focus.length }));
+          var position = document.createElement('span');
+          position.className = 'guided-view-chapter-index';
+          position.setAttribute('aria-hidden', 'true');
+          position.textContent = (index + 1 < 10 ? '0' : '') + (index + 1);
+          var title = document.createElement('span');
+          title.className = 'guided-view-chapter-title';
+          title.textContent = view.label;
+          var stops = document.createElement('em');
+          stops.className = 'guided-view-chapter-count';
+          stops.textContent = viewerCount('viewer.guided.chapter.stop', view.focus.length);
+          var delta = document.createElement('span');
+          delta.className = 'guided-view-chapter-delta';
+          delta.hidden = true;
+          delta.setAttribute('aria-hidden', 'true');
+          ['stay', 'enter', 'leave'].forEach(function (kind) {
+            var value = document.createElement('span');
+            value.setAttribute('data-delta-kind', kind);
+            delta.appendChild(value);
+          });
+          button.appendChild(position);
+          button.appendChild(title);
+          button.appendChild(stops);
+          button.appendChild(delta);
+          item.appendChild(button);
+          chapterList.appendChild(item);
+          chapterButtons.push(button);
+        });
+      }
+
+      function syncChapterIndex() {
+        chapterButtons.forEach(function (button, index) {
+          var current = index === activeIndex;
+          var stops = button.querySelector('.guided-view-chapter-count');
+          var deltaLabel = button.querySelector('.guided-view-chapter-delta');
+          var position = activeIndex < 0 ? 'available' : (current ? 'current' : (index < activeIndex ? 'before' : 'after'));
+          button.setAttribute('data-chapter-position', position);
+          button.setAttribute('aria-pressed', current ? 'true' : 'false');
+          button.setAttribute('tabindex', current || (activeIndex < 0 && index === 0) ? '0' : '-1');
+          if (current) {
+            stops.hidden = false;
+            deltaLabel.hidden = true;
+            button.removeAttribute('data-chapter-delta');
+            button.setAttribute('aria-label', viewerText('viewer.guided.chapter.current', {
+              index: index + 1,
+              total: views.length,
+              label: views[index].label,
+              count: views[index].focus.length
+            }));
+            button.title = viewerText('viewer.guided.chapter.current.title', {
+              label: views[index].label,
+              count: views[index].focus.length
+            });
+          } else {
+            var delta = chapterDelta(activeIndex >= 0 ? views[activeIndex] : null, views[index]);
+            var compact = '=' + delta.stay.length + ' +' + delta.enter.length + ' \u2212' + delta.leave.length;
+            var expanded = viewerText('viewer.guided.chapter.delta.expanded', {
+              stay: delta.stay.length,
+              enter: delta.enter.length,
+              leave: delta.leave.length
+            });
+            stops.hidden = true;
+            deltaLabel.hidden = false;
+            deltaLabel.querySelector('[data-delta-kind="stay"]').textContent = '=' + delta.stay.length;
+            deltaLabel.querySelector('[data-delta-kind="enter"]').textContent = '+' + delta.enter.length;
+            deltaLabel.querySelector('[data-delta-kind="leave"]').textContent = '\u2212' + delta.leave.length;
+            button.setAttribute('data-chapter-delta', compact);
+            button.setAttribute('aria-label', viewerText('viewer.guided.chapter.delta.aria', {
+              index: index + 1,
+              total: views.length,
+              label: views[index].label,
+              delta: expanded
+            }));
+            button.title = viewerText('viewer.guided.chapter.delta.title', {
+              label: views[index].label,
+              delta: compact
+            });
+          }
+          if (current) button.setAttribute('aria-current', 'step');
+          else button.removeAttribute('aria-current');
+          if (button.parentElement) button.parentElement.setAttribute('data-chapter-position', position);
+        });
+        if (activeIndex >= 0) centerChapterButton(chapterButtons[activeIndex]);
+      }
+
+      function chapterPreviewBlocked() {
+        if (document.hidden || playing || currentHandoff) return true;
+        if (document.documentElement.getAttribute('data-embed') === 'true') return true;
+        if (window.matchMedia && window.matchMedia('print').matches) return true;
+        if (svg.hasAttribute('data-route-picking') || svg.hasAttribute('data-route-active')) return true;
+        if (svg.hasAttribute('data-lens-active') || svg.hasAttribute('data-legend-preview-active')) return true;
+        if (svg.hasAttribute('data-relationship-preview-active') || svg.hasAttribute('data-intent-trace-active')) return true;
+        return activeIndex < 0 && svg.hasAttribute('data-focus-active');
+      }
+
+      function clearChapterPreviewPresentation() {
+        svg.removeAttribute('data-chapter-preview');
+        Array.prototype.forEach.call(svg.querySelectorAll('[data-chapter-preview-role]'), function (node) {
+          node.removeAttribute('data-chapter-preview-role');
+        });
+        chapterButtons.forEach(function (button) { button.removeAttribute('data-preview-active'); });
+        activePreviewIndex = -1;
+        if (previewOwnerToken && Archify.motionGovernor) {
+          var token = previewOwnerToken;
+          previewOwnerToken = 0;
+          Archify.motionGovernor.release(token);
+        }
+      }
+
+      function clearChapterPreview(options) {
+        options = options || {};
+        previewGeneration += 1;
+        if (options.clearIntents !== false) {
+          pointerPreviewIntent = null;
+          focusPreviewIntent = null;
+        }
+        clearChapterPreviewPresentation();
+        return true;
+      }
+
+      function winningChapterPreviewIntent() {
+        return [pointerPreviewIntent, focusPreviewIntent].filter(function (intent) {
+          return intent && intent.index >= 0 && intent.index < views.length && intent.index !== activeIndex;
+        }).sort(function (left, right) { return right.generation - left.generation; })[0] || null;
+      }
+
+      function showChapterPreview(index) {
+        if (index < 0 || index >= views.length || index === activeIndex || chapterPreviewBlocked()) {
+          clearChapterPreviewPresentation();
+          return false;
+        }
+        if (activePreviewIndex === index && svg.getAttribute('data-chapter-preview') === views[index].id) return true;
+        clearChapterPreviewPresentation();
+        var delta = chapterDelta(activeIndex >= 0 ? views[activeIndex] : null, views[index]);
+        var roles = Object.create(null);
+        delta.stay.forEach(function (id) { roles[id] = 'stay'; });
+        delta.enter.forEach(function (id) { roles[id] = 'enter'; });
+        delta.leave.forEach(function (id) { roles[id] = 'leave'; });
+        Array.prototype.forEach.call(svg.querySelectorAll('[data-node-id]'), function (node) {
+          var role = roles[node.getAttribute('data-node-id')];
+          if (role) node.setAttribute('data-chapter-preview-role', role);
+        });
+        svg.setAttribute('data-chapter-preview', views[index].id);
+        chapterButtons[index].setAttribute('data-preview-active', 'true');
+        activePreviewIndex = index;
+        if (Archify.motionGovernor && Archify.motionGovernor.capable) {
+          previewOwnerToken = Archify.motionGovernor.claim('chapter-preview', function () {
+            previewOwnerToken = 0;
+            clearChapterPreviewPresentation();
+          });
+        }
+        return true;
+      }
+
+      function syncChapterPreview() {
+        var intent = winningChapterPreviewIntent();
+        if (!intent || chapterPreviewBlocked()) {
+          clearChapterPreviewPresentation();
+          return false;
+        }
+        return showChapterPreview(intent.index);
+      }
+
+      function setChapterPreviewIntent(source, index) {
+        var intent = { index: index, generation: ++previewGeneration };
+        if (source === 'pointer') pointerPreviewIntent = intent;
+        else focusPreviewIntent = intent;
+        if (playing) pausePlayback();
+        return syncChapterPreview();
+      }
+
+      function clearChapterPreviewIntent(source, index) {
+        var intent = source === 'pointer' ? pointerPreviewIntent : focusPreviewIntent;
+        if (intent && (typeof index !== 'number' || intent.index === index)) {
+          if (source === 'pointer') pointerPreviewIntent = null;
+          else focusPreviewIntent = null;
+          previewGeneration += 1;
+        }
+        return syncChapterPreview();
+      }
+
+      function hoverCapable() {
+        return !!(window.matchMedia && window.matchMedia('(hover: hover)').matches);
+      }
+
+      function sharePlaybackRequested() {
+        try { return new URLSearchParams(location.search).get('play') === '1'; }
+        catch (_) { return false; }
+      }
+
+      autoplayPending = sharePlaybackRequested();
+      if (autoplayPending) {
+        document.documentElement.setAttribute('data-share-playback', 'true');
+        setAutoplayState('pending');
+      }
+
+      function setAutoplayState(state) {
+        if (state) panel.setAttribute('data-autoplay', state);
+        else panel.removeAttribute('data-autoplay');
+        renderShareCue();
+      }
+
+      function shareCueStatus(state) {
+        return {
+          pending: viewerText('viewer.guided.state.ready'),
+          playing: viewerText('viewer.guided.state.playing'),
+          complete: viewerText('viewer.guided.state.settled'),
+          interrupted: viewerText('viewer.guided.state.paused'),
+          pinned: viewerText('viewer.guided.state.pinned'),
+          'reduced-motion': viewerText('viewer.guided.state.still')
+        }[state] || viewerText('viewer.guided.state.ready');
+      }
+
+      function shareCueBeatCopy(state, view, stops) {
+        var total = stops.length;
+        var activeStop = storyBeatIndex >= 0 ? stops[storyBeatIndex] : null;
+        if ((state === 'playing' || state === 'interrupted') && activeStop) {
+          return viewerText('viewer.guided.share.step', {
+            index: (storyBeatIndex + 1 < 10 ? '0' : '') + (storyBeatIndex + 1),
+            total: (total < 10 ? '0' : '') + total,
+            label: activeStop.textContent
+          });
+        }
+        if (state === 'pinned' && activeStop) {
+          return storyBeatCopy(storySteps[storyBeatIndex], total);
+        }
+        if (state === 'reduced-motion' && activeStop && hashBeatMatchesCurrent()) {
+          return viewerText('viewer.guided.share.staticMoment', {
+            step: viewerText('viewer.guided.share.step', {
+              index: (storyBeatIndex + 1 < 10 ? '0' : '') + (storyBeatIndex + 1),
+              total: (total < 10 ? '0' : '') + total,
+              label: activeStop.textContent
+            })
+          });
+        }
+        if (state === 'complete') return viewerText('viewer.guided.share.complete', {
+          count: total,
+          note: view.note || viewerText('viewer.guided.share.settled')
+        });
+        if (state === 'reduced-motion') return viewerText('viewer.guided.share.staticPath', { count: total });
+        if (state === 'pending') return viewerText('viewer.guided.share.ready', { count: total });
+        return view.note || viewerText('viewer.guided.chapter.selectedNodes', { count: view.focus.length });
+      }
+
+      function renderShareCue() {
+        if (!shareCue) return;
+        var view = activeIndex >= 0 ? views[activeIndex] : null;
+        var shareMode = document.documentElement.getAttribute('data-share-playback') === 'true';
+        var embedMode = document.documentElement.getAttribute('data-embed') === 'true';
+        var pinnedMode = !shareMode && embedMode && hashBeatMatchesCurrent();
+        if (pinnedMode) document.documentElement.setAttribute('data-share-moment', 'true');
+        else document.documentElement.removeAttribute('data-share-moment');
+        shareCue.hidden = !(embedMode && view && (shareMode || pinnedMode));
+        if (shareCue.hidden) return;
+        var state = pinnedMode ? 'pinned' : (panel.getAttribute('data-autoplay') || 'pending');
+        var stops = Array.prototype.slice.call(trail.querySelectorAll('[data-story-node]'));
+        var route = stops.map(function (stop, index) {
+          if (index === 0) return stop.textContent;
+          var kind = stop.getAttribute('data-story-link');
+          var separator = kind === 'forward' ? '\u2192' : (kind === 'reverse' ? '\u2190' : (kind === 'multiple' ? '\u21c4' : '\u00b7'));
+          return separator + ' ' + stop.textContent;
+        }).join(' ');
+        var beatCopy = shareCueBeatCopy(state, view, stops);
+        shareCue.setAttribute('data-state', state);
+        shareCue.setAttribute('aria-live', state === 'playing' ? 'off' : 'polite');
+        shareCueState.textContent = shareCueStatus(state);
+        shareCueCount.textContent = viewerText('viewer.guided.share.chapter', {
+          index: (activeIndex + 1 < 10 ? '0' : '') + (activeIndex + 1),
+          total: (views.length < 10 ? '0' : '') + views.length
+        });
+        shareCueLabel.textContent = view.label;
+        shareCueNote.textContent = beatCopy;
+        shareCueRoute.textContent = route;
+        shareCue.setAttribute('aria-label', viewerText('viewer.guided.share.aria', {
+          state: shareCueStatus(state),
+          index: activeIndex + 1,
+          total: views.length,
+          label: view.label,
+          beat: beatCopy,
+          route: route
+        }));
+      }
+
+      function setShareCueProgress(fraction) {
+        if (!shareCueProgress) return;
+        shareCueProgress.style.animation = 'none';
+        shareCueProgress.style.setProperty('--guided-progress-start', String(Math.max(0, Math.min(1, fraction))));
+        shareCueProgress.style.transform = 'scaleX(' + Math.max(0, Math.min(1, fraction)) + ')';
+      }
+
+      function startShareCueProgress(fraction, duration) {
+        if (!shareCueProgress) return;
+        setShareCueProgress(fraction || 0);
+        void shareCueProgress.offsetWidth;
+        shareCueProgress.style.animation = 'archify-guided-progress ' + Math.max(1, duration || VIEW_INTERVAL_MS) + 'ms linear forwards';
+      }
+
+      function storyNodeLabel(node, fallback) {
+        if (!node) return fallback;
+        return node.getAttribute('data-node-label') ||
+          (node.getAttribute('aria-label') || fallback).replace(/^Focus\s+/, '');
+      }
+
+      function storyEdgeKey(edge) {
+        return edge.getAttribute('data-edge-key') || (
+          edge.getAttribute('data-edge-from') + '\u0000' +
+          edge.getAttribute('data-edge-to') + '\u0000' +
+          (edge.getAttribute('data-edge-label') || '')
+        );
+      }
+
+      function uniqueStoryEdges(edgeList) {
+        var positions = {};
+        var unique = [];
+        edgeList.forEach(function (edge) {
+          var key = storyEdgeKey(edge);
+          if (!Object.prototype.hasOwnProperty.call(positions, key)) {
+            positions[key] = unique.length;
+            unique.push(edge);
+            return;
+          }
+          var index = positions[key];
+          if (!storyGeometry(unique[index]).length && storyGeometry(edge).length) unique[index] = edge;
+        });
+        return unique;
+      }
+
+      function storyStep(view, index, edgeList, byId) {
+        var id = view.focus[index];
+        var node = byId[id];
+        var previousId = index > 0 ? view.focus[index - 1] : '';
+        var forward = [];
+        var reverse = [];
+        if (previousId) {
+          edgeList.forEach(function (edge) {
+            var from = edge.getAttribute('data-edge-from');
+            var to = edge.getAttribute('data-edge-to');
+            if (from === previousId && to === id) forward.push(edge);
+            else if (from === id && to === previousId) reverse.push(edge);
+          });
+        }
+        forward = uniqueStoryEdges(forward);
+        reverse = uniqueStoryEdges(reverse);
+        var edges = forward.concat(reverse).sort(function (left, right) {
+          return edgeList.indexOf(left) - edgeList.indexOf(right);
+        });
+        var relation = index === 0 ? 'start' : (!edges.length ? 'group' : (
+          edges.length === 1 && forward.length === 1 ? 'forward' :
+          (edges.length === 1 && reverse.length === 1 ? 'reverse' : 'multiple')
+        ));
+        return {
+          index: index,
+          nodeId: id,
+          nodeLabel: storyNodeLabel(byId[id], id),
+          previousId: previousId,
+          previousLabel: previousId ? storyNodeLabel(byId[previousId], previousId) : '',
+          relation: relation,
+          edges: edges,
+          edgeKeys: edges.map(storyEdgeKey),
+          edgeLabels: edges.map(function (edge) { return edge.getAttribute('data-edge-label') || ''; }).filter(function (value, edgeIndex, values) {
+            return value && values.indexOf(value) === edgeIndex;
+          }),
+          responsibility: node ? (node.getAttribute('data-node-sublabel') || '') : '',
+          context: node ? (node.getAttribute('data-node-context') || '') : ''
+        };
+      }
+
+      function storyBeatCopy(step, total) {
+        if (!step) return '';
+        var position = (step.index + 1 < 10 ? '0' : '') + (step.index + 1);
+        var countValue = (total < 10 ? '0' : '') + total;
+        if (step.relation === 'start') return viewerText('viewer.guided.beat.start', { index: position, total: countValue, label: step.nodeLabel });
+        if (step.relation === 'forward') return viewerText('viewer.guided.beat.forward', { index: position, total: countValue, from: step.previousLabel, to: step.nodeLabel });
+        if (step.relation === 'reverse') return viewerText('viewer.guided.beat.reverse', { index: position, total: countValue, from: step.nodeLabel, to: step.previousLabel });
+        if (step.relation === 'multiple') return viewerText('viewer.guided.beat.multiple', { index: position, total: countValue, from: step.previousLabel, to: step.nodeLabel, count: step.edges.length });
+        return viewerText('viewer.guided.beat.group', { index: position, total: countValue, from: step.previousLabel, to: step.nodeLabel });
+      }
+
+      function storyBeatAria(step, total) {
+        var prefix = viewerText('viewer.guided.beat.aria.prefix', { index: step.index + 1, total: total, label: step.nodeLabel });
+        if (step.relation === 'start') return prefix + viewerText('viewer.guided.beat.aria.start');
+        if (step.relation === 'forward') return prefix + viewerText('viewer.guided.beat.aria.forward', { from: step.previousLabel });
+        if (step.relation === 'reverse') return prefix + viewerText('viewer.guided.beat.aria.reverse', { from: step.previousLabel, to: step.nodeLabel });
+        if (step.relation === 'multiple') return prefix + viewerText('viewer.guided.beat.aria.multiple', { from: step.previousLabel, count: step.edges.length });
+        return prefix + viewerText('viewer.guided.beat.aria.group', { from: step.previousLabel });
+      }
+
+      function storyCaptionRouteCopy(step) {
+        if (step.relation === 'start') return step.nodeLabel + ' · ' + viewerText('viewer.guided.caption.start');
+        if (step.relation === 'reverse') return step.previousLabel + ' ← ' + step.nodeLabel;
+        if (step.relation === 'multiple') return step.previousLabel + ' ⇄ ' + step.nodeLabel;
+        if (step.relation === 'group') return step.previousLabel + ' · ' + step.nodeLabel;
+        return step.previousLabel + ' → ' + step.nodeLabel;
+      }
+
+      function storyCaptionDetailCopy(step) {
+        var facts = [];
+        if (step.relation === 'group') facts.push(viewerText('viewer.guided.caption.grouped'));
+        else if (step.edgeLabels.length) facts.push(step.edgeLabels.slice(0, 3).join(' + ') + (step.edgeLabels.length > 3 ? viewerText('viewer.guided.caption.more', { count: step.edgeLabels.length - 3 }) : ''));
+        else if (step.relation === 'reverse') facts.push(viewerText('viewer.guided.caption.reverse'));
+        else if (step.relation === 'multiple') facts.push(viewerText('viewer.guided.caption.relationships', { count: step.edges.length }));
+        else if (step.relation !== 'start') facts.push(viewerText('viewer.guided.caption.relationship'));
+        if (step.relation === 'reverse') facts.push(viewerText('viewer.guided.caption.direction', { from: step.nodeLabel, to: step.previousLabel }));
+        if (step.responsibility) facts.push(step.responsibility);
+        if (step.context) facts.push(step.context);
+        if (!facts.length) facts.push(viewerText('viewer.guided.caption.starting'));
+        return facts.join(' · ');
+      }
+
+      function renderStoryCaption(step, total, nextStep) {
+        if (!storyCaption) return;
+        if (!step) {
+          storyCaption.hidden = true;
+          storyCaption.removeAttribute('data-story-caption');
+          storyCaptionNext.hidden = true;
+          storyCaptionNextLabel.textContent = '';
+          return;
+        }
+        storyCaption.hidden = false;
+        storyCaption.setAttribute('data-story-caption', step.relation);
+        storyCaption.setAttribute('aria-live', playing ? 'off' : 'polite');
+        storyCaptionIndex.textContent = (step.index + 1 < 10 ? '0' : '') + (step.index + 1) + ' / ' + (total < 10 ? '0' : '') + total;
+        storyCaptionRoute.textContent = storyCaptionRouteCopy(step);
+        storyCaptionDetail.textContent = storyCaptionDetailCopy(step);
+        storyCaptionNext.hidden = !nextStep;
+        storyCaptionNextLabel.textContent = nextStep
+          ? ((nextStep.index + 1 < 10 ? '0' : '') + (nextStep.index + 1) + ' · ' + nextStep.nodeLabel)
+          : '';
+        storyCaption.style.animation = 'none';
+        void storyCaption.offsetWidth;
+        storyCaption.style.removeProperty('animation');
+      }
+
+      function storyMomentLink() {
+        var view = activeIndex >= 0 ? views[activeIndex] : null;
+        var step = storyBeatIndex >= 0 ? storySteps[storyBeatIndex] : null;
+        if (!view || !step) return '';
+        var url = new URL(location.href);
+        url.searchParams.delete('play');
+        url.hash = 'view=' + encodeURIComponent(view.id) + '&beat=' + encodeURIComponent(step.nodeId);
+        return url.href;
+      }
+
+      function fallbackCopyStoryMoment(value) {
+        var field = document.createElement('textarea');
+        field.value = value;
+        field.setAttribute('readonly', '');
+        field.style.position = 'fixed';
+        field.style.opacity = '0';
+        document.body.appendChild(field);
+        field.select();
+        var copied = false;
+        try { copied = document.execCommand('copy'); } catch (_) {}
+        field.remove();
+        return copied;
+      }
+
+      function resetBeatLinkFeedback() {
+        if (beatLinkFeedbackTimer) clearTimeout(beatLinkFeedbackTimer);
+        beatLinkFeedbackTimer = null;
+        beatLink.removeAttribute('data-copy-state');
+        beatLinkLabel.textContent = viewerText('viewer.guided.copyMoment');
+      }
+
+      function syncBeatLink() {
+        var step = storyBeatIndex >= 0 ? storySteps[storyBeatIndex] : null;
+        var available = !!(activeIndex >= 0 && step && !currentHandoff);
+        beatLink.disabled = !available;
+        if (!beatLink.hasAttribute('data-copy-state')) beatLinkLabel.textContent = viewerText('viewer.guided.copyMoment');
+        var description = available
+          ? viewerText('viewer.guided.beatLink', { index: step.index + 1, total: storySteps.length, label: step.nodeLabel })
+          : viewerText('viewer.guided.selectBeatLink');
+        beatLink.setAttribute('aria-label', description);
+        beatLink.title = description;
+      }
+
+      function setBeatLinkFeedback(copied) {
+        resetBeatLinkFeedback();
+        beatLink.setAttribute('data-copy-state', copied ? 'copied' : 'failed');
+        beatLinkLabel.textContent = viewerText(copied ? 'viewer.guided.copied' : 'viewer.guided.copyFailed');
+        beatLink.setAttribute('aria-label', viewerText(copied ? 'viewer.guided.momentCopied' : 'viewer.guided.momentCopyFailed'));
+        beatLinkFeedbackTimer = setTimeout(function () {
+          resetBeatLinkFeedback();
+          syncBeatLink();
+        }, 1600);
+      }
+
+      function copyStoryMomentLink() {
+        if (playing) pausePlayback();
+        var value = storyMomentLink();
+        if (!value) return Promise.resolve(false);
+        var copy = navigator.clipboard && typeof navigator.clipboard.writeText === 'function'
+          ? navigator.clipboard.writeText(value).then(function () { return true; }).catch(function () { return fallbackCopyStoryMoment(value); })
+          : Promise.resolve(fallbackCopyStoryMoment(value));
+        return copy.then(function (copied) {
+          setBeatLinkFeedback(copied);
+          return copied;
+        });
+      }
+
+      function hashBeatMatchesCurrent() {
+        var view = activeIndex >= 0 ? views[activeIndex] : null;
+        var step = storyBeatIndex >= 0 ? storySteps[storyBeatIndex] : null;
+        if (!view || !step) return false;
+        try {
+          var params = new URLSearchParams(location.hash.replace(/^#/, ''));
+          return params.get('view') === view.id && params.get('beat') === step.nodeId;
+        } catch (_) { return false; }
+      }
+
+      function storyMotionAllowed() {
+        if (document.hidden || reducedMotion()) return false;
+        if (document.documentElement.getAttribute('data-motion') !== 'live') return false;
+        if (document.documentElement.getAttribute('data-embed') === 'true' &&
+            document.documentElement.getAttribute('data-share-playback') !== 'true') return false;
+        if (window.matchMedia && window.matchMedia('print').matches) return false;
+        return !(Archify.motionGovernor && Archify.motionGovernor.isPaused());
+      }
+
+      function storyAutomaticPlaybackAllowed() {
+        if (document.hidden || reducedMotion()) return false;
+        if (window.matchMedia && window.matchMedia('print').matches) return false;
+        if (Archify.motionGovernor && Archify.motionGovernor.capable) return !Archify.motionGovernor.isPaused();
+        return true;
+      }
+
+      function clearStoryPulse(options) {
+        options = options || {};
+        storyPulseGeneration += 1;
+        Array.prototype.forEach.call(svg.querySelectorAll('.story-trail-flow[data-story-pulse]'), function (flow) {
+          flow.removeAttribute('data-story-pulse');
+        });
+        Array.prototype.forEach.call(svg.querySelectorAll('[data-story-carrier-overlay]'), function (overlay) {
+          overlay.remove();
+        });
+        if (storyPulseOwnerToken && options.release !== false && Archify.motionGovernor) {
+          var token = storyPulseOwnerToken;
+          storyPulseOwnerToken = 0;
+          Archify.motionGovernor.release(token);
+        } else if (options.release === false) storyPulseOwnerToken = 0;
+      }
+
+      function pulseStoryStep(step) {
+        clearStoryPulse();
+        if (!step || (step.relation !== 'forward' && step.relation !== 'reverse') || step.edges.length !== 1 || !storyMotionAllowed()) return false;
+        var flows = Array.prototype.slice.call(svg.querySelectorAll('.story-trail-flow[data-story-beat-step="' + step.index + '"]'));
+        if (!flows.length) return false;
+        var pulseGeneration = storyPulseGeneration;
+        if (Archify.motionGovernor && Archify.motionGovernor.capable) {
+          storyPulseOwnerToken = Archify.motionGovernor.claim('story', function () {
+            clearStoryPulse({ release: false });
+          });
+        }
+        flows.forEach(function (flow) { flow.setAttribute('data-story-pulse', 'true'); });
+        if (Archify.flowTokens && typeof Archify.flowTokens.create === 'function') {
+          var edge = step.edges[0];
+          var shapes = storyGeometry(edge);
+          var carrier = shapes.length ? Archify.flowTokens.create(edge, shapes[0], {
+            className: 'story-flow-token',
+            duration: '0.78s'
+          }) : null;
+          if (carrier) {
+            var carrierOverlay = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+            var carrierWrapper = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+            carrierOverlay.setAttribute('class', 'story-carrier-overlay');
+            carrierOverlay.setAttribute('data-story-carrier-overlay', '');
+            carrierOverlay.setAttribute('aria-hidden', 'true');
+            if (edge.hasAttribute('transform')) carrierWrapper.setAttribute('transform', edge.getAttribute('transform'));
+            carrier.setAttribute('data-story-carrier-token', '');
+            carrier.setAttribute('data-story-beat-step', String(step.index));
+            carrierWrapper.appendChild(carrier);
+            carrierOverlay.appendChild(carrierWrapper);
+            var firstNode = svg.querySelector('[data-node-id]');
+            while (firstNode && firstNode.parentNode !== svg) firstNode = firstNode.parentNode;
+            if (firstNode) svg.insertBefore(carrierOverlay, firstNode);
+            else svg.appendChild(carrierOverlay);
+          }
+        }
+        void flows[0].getBoundingClientRect();
+        flows[0].addEventListener('animationend', function () {
+          if (pulseGeneration === storyPulseGeneration) clearStoryPulse();
+        }, { once: true });
+        return true;
+      }
+
+      function stopStoryBeatTimer(options) {
+        options = options || {};
+        storyPlaybackGeneration += 1;
+        if (storyBeatTimer && options.preserveElapsed === true && storyBeatStartedAt) {
+          storyBeatElapsedMs = Math.min(storyBeatDwellMs, storyBeatElapsedMs + Math.max(0, Date.now() - storyBeatStartedAt));
+        }
+        if (storyBeatTimer) clearTimeout(storyBeatTimer);
+        storyBeatTimer = null;
+        storyBeatStartedAt = 0;
+      }
+
+      function centerStoryStop(stop) {
+        if (!stop || !trail) return false;
+        var bounds = stop.getBoundingClientRect();
+        var viewportLeft = trail.getBoundingClientRect().left + trail.clientLeft;
+        var target = Math.max(0, trail.scrollLeft + bounds.left - viewportLeft - (trail.clientWidth - bounds.width) / 2);
+        trail.scrollLeft = target;
+        return true;
+      }
+
+      function storyBeatDwell(total) {
+        return Math.max(STORY_FOLLOW_MIN_DWELL_MS, VIEW_INTERVAL_MS / Math.max(1, total));
+      }
+
+      function clearStoryFollow() {
+        storyFollowGeneration += 1;
+        svg.removeAttribute('data-story-follow');
+        panel.removeAttribute('data-story-follow');
+        panel.removeAttribute('data-story-follow-node');
+      }
+
+      function storyFrameIds(step) {
+        if (!step) return [];
+        var ids = [];
+        if (step.index > 0 && storySteps[step.index - 1]) ids.push(storySteps[step.index - 1].nodeId);
+        ids.push(step.nodeId);
+        if (step.index + 1 < storySteps.length) ids.push(storySteps[step.index + 1].nodeId);
+        return ids;
+      }
+
+      function followStoryStep(step, options) {
+        options = options || {};
+        if (!step || document.hidden) return false;
+        if (!Archify.view || typeof Archify.view.reveal !== 'function') {
+          var deferredIndex = step.index;
+          var deferredGeneration = ++storyFollowGeneration;
+          requestAnimationFrame(function () {
+            if (deferredGeneration !== storyFollowGeneration || storyBeatIndex !== deferredIndex) return;
+            if (Archify.view && typeof Archify.view.reveal === 'function') followStoryStep(step, options);
+          });
+          return true;
+        }
+        if (window.matchMedia && window.matchMedia('print').matches) return false;
+        var embed = document.documentElement.getAttribute('data-embed') === 'true';
+        var explicitEmbedPlayback = document.documentElement.getAttribute('data-share-playback') === 'true';
+        if (embed && !explicitEmbedPlayback && options.linked !== true) return false;
+        var ids = storyFrameIds(step);
+        var generation = ++storyFollowGeneration;
+        svg.setAttribute('data-story-follow', step.nodeId);
+        panel.setAttribute('data-story-follow', 'moving');
+        panel.setAttribute('data-story-follow-node', step.nodeId);
+        var receipt = Archify.view.reveal(ids, {
+          reason: options.manual === true ? 'story-beat' : 'story-follow',
+          padding: 64,
+          maxScale: 1.65,
+          duration: STORY_FOLLOW_DURATION_MS,
+          instant: options.instant === true || reducedMotion() || document.documentElement.getAttribute('data-motion') !== 'live'
+        });
+        if (receipt && receipt.finished && typeof receipt.finished.then === 'function') {
+          receipt.finished.then(function (result) {
+            if (generation !== storyFollowGeneration || storyBeatIndex !== step.index) return;
+            svg.removeAttribute('data-story-follow');
+            panel.setAttribute('data-story-follow', result && result.state === 'complete' ? 'settled' : 'interrupted');
+          });
+        } else if (generation === storyFollowGeneration) {
+          panel.setAttribute('data-story-follow', 'settled');
+        }
+        return receipt;
+      }
+
+      function setStoryBeat(index, options) {
+        options = options || {};
+        var stops = Array.prototype.slice.call(trail.querySelectorAll('[data-story-node]'));
+        if (!stops.length) return false;
+        resetBeatLinkFeedback();
+        storyBeatIndex = Math.max(0, Math.min(stops.length - 1, index));
+        var nextStep = storyBeatIndex + 1 < storySteps.length ? storySteps[storyBeatIndex + 1] : null;
+        svg.setAttribute('data-story-beat', (storyBeatIndex + 1) + '/' + stops.length);
+        panel.setAttribute('data-story-beat', (storyBeatIndex + 1) + '/' + stops.length);
+        if (nextStep) {
+          svg.setAttribute('data-story-next', nextStep.nodeId);
+          panel.setAttribute('data-story-next', nextStep.nodeId);
+        } else {
+          svg.removeAttribute('data-story-next');
+          panel.removeAttribute('data-story-next');
+        }
+        function storyBeatState(step) {
+          if (step < storyBeatIndex) return 'past';
+          if (step === storyBeatIndex) return 'active';
+          if (step === storyBeatIndex + 1) return 'next';
+          return 'pending';
+        }
+        Array.prototype.forEach.call(svg.querySelectorAll('[data-story-step]'), function (node) {
+          var step = Number(node.getAttribute('data-story-step'));
+          node.setAttribute('data-story-beat-state', storyBeatState(step));
+        });
+        Array.prototype.forEach.call(svg.querySelectorAll('[data-story-beat-step]'), function (edge) {
+          var step = Number(edge.getAttribute('data-story-beat-step'));
+          edge.setAttribute('data-story-beat-state', storyBeatState(step));
+        });
+        stops.forEach(function (stop, step) {
+          stop.setAttribute('data-story-beat-state', storyBeatState(step));
+          if (step === storyBeatIndex) stop.setAttribute('aria-current', 'step');
+          else stop.removeAttribute('aria-current');
+        });
+        note.setAttribute('aria-live', 'off');
+        note.textContent = storyBeatCopy(storySteps[storyBeatIndex], stops.length);
+        renderStoryCaption(storySteps[storyBeatIndex], stops.length, nextStep);
+        if (options.center === true) centerStoryStop(stops[storyBeatIndex]);
+        if (options.pulse === true) pulseStoryStep(storySteps[storyBeatIndex]);
+        else clearStoryPulse();
+        if (options.follow === true) followStoryStep(storySteps[storyBeatIndex], {
+          manual: options.manual === true,
