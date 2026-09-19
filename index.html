@@ -33,6 +33,7 @@
   </script>
   <link rel="stylesheet" href="archify-fonts.css">
   <link rel="stylesheet" href="archify.css">
+  <link rel="stylesheet" href="archify-2.css">
 </head>
 <body>
   <!-- Toolbar: theme, live visual style, trace motion, presentation stage, and export.
@@ -672,3 +673,22 @@
     </div>
 
   </div>
+
+    <script>
+      (function () {
+        var parts = ['archify-app-1.txt', 'archify-app-2.txt', 'archify-app-3.txt', 'archify-app-4.txt', 'archify-app-5.txt', 'archify-app-6.txt'];
+        var src = '';
+        for (var i = 0; i < parts.length; i++) {
+          var x = new XMLHttpRequest();
+          x.open('GET', parts[i], false);
+          x.send(null);
+          if (x.status !== 200) { document.title = 'Error cargando el diagrama'; return; }
+          src += x.responseText;
+        }
+        var s = document.createElement('script');
+        s.textContent = src;
+        document.body.appendChild(s);
+      })();
+    </script>
+</body>
+</html>
